@@ -1,0 +1,25 @@
+[Unit]
+Description=RTPI Departure Board
+After=network-online.target
+Wants=network-online.target
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+
+[Service]
+Type=simple
+User=dietpi
+WorkingDirectory=/home/dietpi/pi-rtpi-display
+ExecStart=/usr/bin/python3 /home/dietpi/pi-rtpi-display/rtpi.py
+Restart=on-failure
+RestartSec=10
+StandardInput=tty-force
+StandardOutput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Environment=PYTHONIOENCODING=utf-8
+Environment=LANG=en_US.UTF-8
+Environment=TERM=linux
+
+[Install]
+WantedBy=multi-user.target
