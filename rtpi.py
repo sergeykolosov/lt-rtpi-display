@@ -46,6 +46,7 @@ class AppState:
     departures: list = field(default_factory=list)
     stop_id: str = ""
     stop_name: str | None = None
+    stop_direction: str | None = None
     last_updated: datetime.datetime | None = None
     error_msg: str | None = None
     refreshing: bool = False
@@ -163,23 +164,25 @@ def build_stops_url(cfg: configparser.ConfigParser, tz: datetime.tzinfo) -> str:
     return f"{base}?{ms}"
 
 
-def parse_stop_name(raw: bytes, stop_id: str) -> str | None:
-    """Return the name field for stop_id from stops.txt, or None if not found."""
+def parse_stop_info(raw: bytes, stop_id: str) -> tuple[str | None, str | None]:
+    """Return (name, direction) for stop_id from stops.txt, or (None, None)."""
     text = raw.decode("utf-8", errors="replace")
     for line in text.splitlines():
         parts = line.split(";")
         if len(parts) >= 6 and parts[0] == stop_id:
-            return parts[5].strip() or None
-    return None
+            name = parts[5].strip() or None
+            direction = parts[1].strip() or None
+            return name, direction
+    return None, None
 
 
-def fetch_stop_name(
+def fetch_stop_info(
     cfg: configparser.ConfigParser, stop_id: str, tz: datetime.tzinfo
-) -> str | None:
+) -> tuple[str | None, str | None]:
     url = build_stops_url(cfg, tz)
     timeout = cfg.getint("api", "timeout")
     raw = fetch_raw(url, timeout)
-    return parse_stop_name(raw, stop_id)
+    return parse_stop_info(raw, stop_id)
 
 
 # ---------------------------------------------------------------------------
@@ -265,9 +268,10 @@ def background_worker(
     interval = cfg.getint("display", "refresh_interval")
     # Fetch stop name once at startup
     with contextlib.suppress(Exception):
-        name = fetch_stop_name(cfg, state.stop_id, tz)
+        name, direction = fetch_stop_info(cfg, state.stop_id, tz)
         with state.lock:
             state.stop_name = name
+            state.stop_direction = direction
     # First departure fetch immediately
     state.refreshing = True
     fetch_and_update(cfg, state)
@@ -352,6 +356,7 @@ def draw_screen(
     *,
     stop_id: str,
     stop_name: str | None,
+    stop_direction: str | None,
     departures: list[Departure],
     last_updated: datetime.datetime | None,
     error_msg: str | None,
@@ -369,21 +374,25 @@ def draw_screen(
     bold = curses.color_pair(ColorPair.HEADER) | curses.A_BOLD
     dim = curses.color_pair(ColorPair.SEP)
 
-    # --- Row 0: title + updated time ---
-    title = f" {stop_name}" if stop_name else f" Stop {stop_id or '?'}"
+    # --- Row 0: title (+ error indicator if any) ---
+    base_name = f" {stop_name}" if stop_name else f" Stop {stop_id or '?'}"
+    safe_addstr(stdscr, 0, 0, base_name, bold)
+    if stop_direction:
+        plain = curses.color_pair(ColorPair.HEADER)
+        suffix = f" | {stop_direction}"
+        safe_addstr(stdscr, 0, len(base_name), suffix, plain)
     if error_msg:
-        status_right = f"ERR:{error_msg}"
-        status_attr = curses.color_pair(ColorPair.ERROR) | curses.A_BOLD
-    elif last_updated:
-        status_right = f"Updated {last_updated.strftime('%H:%M:%S')}"
-        status_attr = dim
-    else:
-        status_right = "Connecting..."
-        status_attr = dim
-
-    safe_addstr(stdscr, 0, 0, title, bold)
-    right_col = max(len(title) + 1, cols - len(status_right) - 1)
-    safe_addstr(stdscr, 0, right_col, status_right, status_attr)
+        err_text = f"ERR:{error_msg}"
+        dir_len = len(f" | {stop_direction}") if stop_direction else 0
+        title_end = len(base_name) + dir_len
+        err_col = max(title_end + 1, cols - len(err_text) - 1)
+        safe_addstr(
+            stdscr,
+            0,
+            err_col,
+            err_text,
+            curses.color_pair(ColorPair.ERROR) | curses.A_BOLD,
+        )
 
     # --- Row 1: separator ---
     draw_separator(stdscr, 1, cols)
@@ -453,8 +462,10 @@ def draw_screen(
     # --- Row rows-1: status bar ---
     if refreshing:
         left_status = " Refreshing..."
+    elif last_updated:
+        left_status = f" {last_updated.astimezone(tz).strftime('%H:%M:%S')}"
     else:
-        left_status = ""
+        left_status = " Connecting..."
     right_status = "[q] quit "
     safe_addstr(stdscr, rows - 1, 0, left_status, dim)
     safe_addstr(stdscr, rows - 1, cols - len(right_status) - 1, right_status, dim)
@@ -512,6 +523,7 @@ def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
             departures = list(state.departures)
             sid = state.stop_id
             sname = state.stop_name
+            sdirection = state.stop_direction
             updated = state.last_updated
             error = state.error_msg
         refreshing = state.refreshing
@@ -520,6 +532,7 @@ def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
             stdscr,
             stop_id=sid,
             stop_name=sname,
+            stop_direction=sdirection,
             departures=departures,
             last_updated=updated,
             error_msg=error,
