@@ -10,3 +10,16 @@ dependencies = []
 dev = [
     "ruff>=0.15.6",
 ]
+
+[tool.ruff.lint]
+preview = true
+select = ["ALL"]
+ignore = [
+    "CPY",  # flake8-copyright
+    "D",  # pydocstyle
+    "DOC",  # pydoclint
+    "PLR",  # pylint refactor
+
+    "COM812",  # flake8-commas: missing-trailing-comma
+    "SIM108",  # flake8-simplify: if-else-block-instead-of-if-exp
+]

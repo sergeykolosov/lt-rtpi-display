@@ -6,41 +6,39 @@ board on the terminal, designed for a Waveshare 3.2" display (~40x15 chars).
 """
 
 import configparser
+import contextlib
 import curses
 import datetime
 import locale
-import os
 import signal
-import sys
 import threading
 import time
 import urllib.error
 import urllib.request
-from collections import namedtuple
 from dataclasses import dataclass, field
-from typing import List, Optional
-
-try:
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-except ImportError:  # Python < 3.9
-    from backports.zoneinfo import ZoneInfo, ZoneInfoNotFoundError  # type: ignore
+from pathlib import Path
+from typing import NamedTuple
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
 
-Departure = namedtuple(
-    "Departure",
-    ["type", "route", "direction", "dep_secs", "vehicle_id", "destination"],
-)
+class Departure(NamedTuple):
+    type: str
+    route: str
+    direction: str
+    dep_secs: int
+    vehicle_id: str
+    destination: str
 
 
 @dataclass
 class AppState:
-    departures: List = field(default_factory=list)
+    departures: list = field(default_factory=list)
     stop_id: str = ""
-    last_updated: Optional[datetime.datetime] = None
-    error_msg: Optional[str] = None
+    last_updated: datetime.datetime | None = None
+    error_msg: str | None = None
     refreshing: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
     stop_event: threading.Event = field(default_factory=threading.Event)
@@ -50,22 +48,22 @@ class AppState:
 # Curses color pair IDs
 # ---------------------------------------------------------------------------
 
-CP_TROL = 1       # red    — trolleybus  rgb(220, 49, 49)
-CP_BUS = 2        # blue   — bus         rgb(0, 115, 172)
-CP_EXPRESS = 3    # green  — express bus rgb(0, 128, 0)
+CP_TROL = 1  # red    — trolleybus  rgb(220, 49, 49)
+CP_BUS = 2  # blue   — bus         rgb(0, 115, 172)
+CP_EXPRESS = 3  # green  — express bus rgb(0, 128, 0)
 CP_TROL_INV = 11  # white on red   — route badge
-CP_BUS_INV = 12   # white on blue  — route badge
+CP_BUS_INV = 12  # white on blue  — route badge
 CP_EXPRESS_INV = 13  # white on green — route badge
 
 # Custom color slot numbers (used when terminal supports init_color)
 CNUM_TROL = 8
 CNUM_BUS = 9
 CNUM_EXPRESS = 10
-CP_HEADER = 4     # white bold — header / column titles
-CP_SEP = 5        # dim white — separator lines
-CP_DUE = 6        # red bold  — imminent departure ("Due")
-CP_ERROR = 7      # red       — error indicator
-CP_STATUS = 8     # dim       — status bar text
+CP_HEADER = 4  # white bold — header / column titles
+CP_SEP = 5  # dim white — separator lines
+CP_DUE = 6  # red bold  — imminent departure ("Due")
+CP_ERROR = 7  # red       — error indicator
+CP_STATUS = 8  # dim       — status bar text
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +84,7 @@ _DEFAULTS = {
 }
 
 
-def load_config(path: str) -> configparser.ConfigParser:
+def load_config(path: Path) -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
     cfg.read_dict(_DEFAULTS)
     cfg.read(path)
@@ -97,6 +95,7 @@ def load_config(path: str) -> configparser.ConfigParser:
 # API helpers
 # ---------------------------------------------------------------------------
 
+
 def build_url(cfg: configparser.ConfigParser) -> str:
     base = cfg.get("api", "base_url")
     stop_id = cfg.get("display", "stop_id")
@@ -105,7 +104,7 @@ def build_url(cfg: configparser.ConfigParser) -> str:
 
 
 def fetch_raw(url: str, timeout: int) -> bytes:
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
+    with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
         return resp.read()
 
 
@@ -114,8 +113,8 @@ def parse_response(raw: bytes) -> tuple:
     text = raw.decode("utf-8", errors="replace")
     departures = []
     stop_id = ""
-    for line in text.splitlines():
-        line = line.strip()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
         if not line:
             continue
         parts = line.split(",")
@@ -144,6 +143,7 @@ def parse_response(raw: bytes) -> tuple:
 # Time / display helpers
 # ---------------------------------------------------------------------------
 
+
 def seconds_since_midnight(tz: datetime.tzinfo) -> int:
     now = datetime.datetime.now(tz)
     return now.hour * 3600 + now.minute * 60 + now.second
@@ -167,20 +167,33 @@ def format_due(dep_secs: int, tz: datetime.tzinfo) -> str:
 
 
 def type_char(t: str) -> str:
-    return {"trol": "T", "bus": "B", "expressbus": "E"}.get(t, "?")
+    return {
+        "trol": "T",
+        "bus": "B",
+        "expressbus": "E",
+    }.get(t, "?")
 
 
 def color_pair_for_type(t: str) -> int:
-    return {"trol": CP_TROL, "bus": CP_BUS, "expressbus": CP_EXPRESS}.get(t, CP_BUS)
+    return {
+        "trol": CP_TROL,
+        "bus": CP_BUS,
+        "expressbus": CP_EXPRESS,
+    }.get(t, CP_BUS)
 
 
 def color_pair_inv_for_type(t: str) -> int:
-    return {"trol": CP_TROL_INV, "bus": CP_BUS_INV, "expressbus": CP_EXPRESS_INV}.get(t, CP_BUS_INV)
+    return {
+        "trol": CP_TROL_INV,
+        "bus": CP_BUS_INV,
+        "expressbus": CP_EXPRESS_INV,
+    }.get(t, CP_BUS_INV)
 
 
 # ---------------------------------------------------------------------------
 # Background fetch thread
 # ---------------------------------------------------------------------------
+
 
 def fetch_and_update(cfg: configparser.ConfigParser, state: AppState) -> None:
     timeout = cfg.getint("api", "timeout")
@@ -192,13 +205,13 @@ def fetch_and_update(cfg: configparser.ConfigParser, state: AppState) -> None:
             state.departures = deps
             if stop_id:
                 state.stop_id = stop_id
-            state.last_updated = datetime.datetime.now()
+            state.last_updated = datetime.datetime.now(datetime.UTC)
             state.error_msg = None
     except urllib.error.URLError as exc:
         reason = str(exc.reason) if hasattr(exc, "reason") else str(exc)
         with state.lock:
             state.error_msg = reason[:24]
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         with state.lock:
             state.error_msg = type(exc).__name__[:24]
 
@@ -220,6 +233,7 @@ def background_worker(cfg: configparser.ConfigParser, state: AppState) -> None:
 # Curses drawing
 # ---------------------------------------------------------------------------
 
+
 def _rgb(r: int, g: int, b: int) -> tuple:
     """Convert 0-255 RGB to curses 0-1000 scale."""
     return int(r / 255 * 1000), int(g / 255 * 1000), int(b / 255 * 1000)
@@ -233,31 +247,37 @@ def init_colors() -> None:
     # (e.g. xterm-256color over SSH). Falls back to nearest standard color
     # on TERM=linux framebuffer console (Pi 1 with Waveshare display).
     if curses.can_change_color() and curses.COLORS >= 16:
-        curses.init_color(CNUM_TROL,    *_rgb(220, 49,  49))   # red
-        curses.init_color(CNUM_BUS,     *_rgb(0,   115, 172))  # blue
-        curses.init_color(CNUM_EXPRESS, *_rgb(0,   128, 0))    # green
-        trol_color    = CNUM_TROL
-        bus_color     = CNUM_BUS
+        curses.init_color(CNUM_TROL, *_rgb(220, 49, 49))  # red
+        curses.init_color(CNUM_BUS, *_rgb(0, 115, 172))  # blue
+        curses.init_color(CNUM_EXPRESS, *_rgb(0, 128, 0))  # green
+        trol_color = CNUM_TROL
+        bus_color = CNUM_BUS
         express_color = CNUM_EXPRESS
     else:
-        trol_color    = curses.COLOR_RED
-        bus_color     = curses.COLOR_BLUE
+        trol_color = curses.COLOR_RED
+        bus_color = curses.COLOR_BLUE
         express_color = curses.COLOR_GREEN
 
-    curses.init_pair(CP_TROL,        trol_color,          -1)
-    curses.init_pair(CP_BUS,         bus_color,           -1)
-    curses.init_pair(CP_EXPRESS,     express_color,       -1)
-    curses.init_pair(CP_TROL_INV,    curses.COLOR_WHITE,  trol_color)
-    curses.init_pair(CP_BUS_INV,     curses.COLOR_WHITE,  bus_color)
-    curses.init_pair(CP_EXPRESS_INV, curses.COLOR_WHITE,  express_color)
-    curses.init_pair(CP_HEADER,      curses.COLOR_WHITE,  -1)
-    curses.init_pair(CP_SEP,         curses.COLOR_WHITE,  -1)
-    curses.init_pair(CP_DUE,         curses.COLOR_RED,    -1)
-    curses.init_pair(CP_ERROR,       curses.COLOR_RED,    -1)
-    curses.init_pair(CP_STATUS,      curses.COLOR_WHITE,  -1)
+    curses.init_pair(CP_TROL, trol_color, -1)
+    curses.init_pair(CP_BUS, bus_color, -1)
+    curses.init_pair(CP_EXPRESS, express_color, -1)
+    curses.init_pair(CP_TROL_INV, curses.COLOR_WHITE, trol_color)
+    curses.init_pair(CP_BUS_INV, curses.COLOR_WHITE, bus_color)
+    curses.init_pair(CP_EXPRESS_INV, curses.COLOR_WHITE, express_color)
+    curses.init_pair(CP_HEADER, curses.COLOR_WHITE, -1)
+    curses.init_pair(CP_SEP, curses.COLOR_WHITE, -1)
+    curses.init_pair(CP_DUE, curses.COLOR_RED, -1)
+    curses.init_pair(CP_ERROR, curses.COLOR_RED, -1)
+    curses.init_pair(CP_STATUS, curses.COLOR_WHITE, -1)
 
 
-def safe_addstr(win, row: int, col: int, text: str, attr: int = 0) -> None:
+def safe_addstr(
+    win: curses.window,
+    row: int,
+    col: int,
+    text: str,
+    attr: int = 0,
+) -> None:
     """addstr wrapper that silently ignores out-of-bounds writes."""
     try:
         max_rows, max_cols = win.getmaxyx()
@@ -273,16 +293,17 @@ def safe_addstr(win, row: int, col: int, text: str, attr: int = 0) -> None:
         pass
 
 
-def draw_separator(win, row: int, cols: int) -> None:
+def draw_separator(win: curses.window, row: int, cols: int) -> None:
     safe_addstr(win, row, 0, "\u2500" * (cols - 1), curses.color_pair(CP_SEP))
 
 
 def draw_screen(
-    stdscr,
+    stdscr: curses.window,
+    *,
     stop_id: str,
-    departures: List[Departure],
-    last_updated: Optional[datetime.datetime],
-    error_msg: Optional[str],
+    departures: list[Departure],
+    last_updated: datetime.datetime | None,
+    error_msg: str | None,
     refreshing: bool,
     max_departures: int,
     tz: datetime.tzinfo,
@@ -317,9 +338,9 @@ def draw_screen(
     draw_separator(stdscr, 1, cols)
 
     # --- Row 2: column headers ---
-    # Layout: " T  Rte  Destination...  Due"
+    # Layout: " T  Rte  Destination...  Due"  # noqa: ERA001
     #          0 1  3    7              cols-5
-    due_width = 5   # " Due " or "  14m" or "15:30"
+    due_width = 5  # " Due " or "  14m" or "15:30"
     route_width = 4  # up to 4 chars (e.g. "1g", "88", "10")
     # dest starts at col 8, ends at cols - due_width - 1
     dest_col = 8
@@ -338,7 +359,7 @@ def draw_screen(
 
     # --- Rows 4..rows-2: departure rows ---
     data_rows = rows - 5  # rows 4 to rows-2 inclusive
-    visible = departures[:min(max_departures, data_rows)]
+    visible = departures[: min(max_departures, data_rows)]
 
     if not visible and last_updated is not None:
         safe_addstr(stdscr, 4, 2, "No departures", dim)
@@ -354,7 +375,9 @@ def draw_screen(
         t_char = type_char(dep.type)
         type_attr = curses.color_pair(color_pair_for_type(dep.type))
         plain = curses.color_pair(CP_HEADER)
-        due_attr = curses.color_pair(CP_DUE) | curses.A_BOLD if due_str == "Due" else plain
+        due_attr = (
+            curses.color_pair(CP_DUE) | curses.A_BOLD if due_str == "Due" else plain
+        )
 
         # Type char — colored + bold
         safe_addstr(stdscr, row, 1, t_char, type_attr | curses.A_BOLD)
@@ -388,16 +411,17 @@ def draw_screen(
 # Main curses entry point
 # ---------------------------------------------------------------------------
 
-def main(stdscr, cfg: configparser.ConfigParser) -> None:
-    for _loc in ("", "C.UTF-8", "C"):
+
+def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
+    for locale_ in ("", "C.UTF-8", "C"):
         try:
-            locale.setlocale(locale.LC_ALL, _loc)
+            locale.setlocale(locale.LC_ALL, locale_)
             break
         except locale.Error:
             continue
 
     curses.curs_set(0)
-    stdscr.nodelay(True)
+    stdscr.nodelay(True)  # noqa: FBT003
     stdscr.timeout(500)
     init_colors()
 
@@ -411,16 +435,14 @@ def main(stdscr, cfg: configparser.ConfigParser) -> None:
     state = AppState(stop_id=stop_id)
 
     # Handle SIGTERM (systemd stop) gracefully
-    def _sigterm(_signum, _frame):
+    def _sigterm(_signum: int, _frame: object) -> None:
         state.stop_event.set()
 
     signal.signal(signal.SIGTERM, _sigterm)
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
     # Start background fetch thread
-    worker = threading.Thread(
-        target=background_worker, args=(cfg, state), daemon=True
-    )
+    worker = threading.Thread(target=background_worker, args=(cfg, state), daemon=True)
     worker.start()
 
     # Draw loop
@@ -440,13 +462,13 @@ def main(stdscr, cfg: configparser.ConfigParser) -> None:
 
         draw_screen(
             stdscr,
-            sid,
-            departures,
-            updated,
-            error,
-            refreshing,
-            max_dep,
-            tz,
+            stop_id=sid,
+            departures=departures,
+            last_updated=updated,
+            error_msg=error,
+            refreshing=refreshing,
+            max_departures=max_dep,
+            tz=tz,
         )
         stdscr.refresh()
 
@@ -460,14 +482,12 @@ def main(stdscr, cfg: configparser.ConfigParser) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def run() -> None:
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, "config.ini")
+    config_path = Path(__file__).resolve().parent / "config.ini"
     cfg = load_config(config_path)
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         curses.wrapper(main, cfg)
-    except KeyboardInterrupt:
-        pass
 
 
 if __name__ == "__main__":
