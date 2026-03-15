@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import NamedTuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -24,8 +25,15 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 # Data model
 # ---------------------------------------------------------------------------
 
+
+class VehicleType(StrEnum):
+    TROL = "trol"
+    BUS = "bus"
+    EXPRESS = "expressbus"
+
+
 class Departure(NamedTuple):
-    type: str
+    type: VehicleType
     route: str
     direction: str
     dep_secs: int
@@ -48,22 +56,28 @@ class AppState:
 # Curses color pair IDs
 # ---------------------------------------------------------------------------
 
-CP_TROL = 1  # red    — trolleybus  rgb(220, 49, 49)
-CP_BUS = 2  # blue   — bus         rgb(0, 115, 172)
-CP_EXPRESS = 3  # green  — express bus rgb(0, 128, 0)
-CP_TROL_INV = 11  # white on red   — route badge
-CP_BUS_INV = 12  # white on blue  — route badge
-CP_EXPRESS_INV = 13  # white on green — route badge
+
+class ColorPair(IntEnum):
+    # fmt: off
+    TROL = 1        # red    — trolleybus  rgb(220, 49, 49)
+    BUS = 2         # blue   — bus         rgb(0, 115, 172)
+    EXPRESS = 3     # green  — express bus rgb(0, 128, 0)
+    HEADER = 4      # white bold — header / column titles
+    SEP = 5         # dim white — separator lines
+    DUE = 6         # red bold  — imminent departure ("Due")
+    ERROR = 7       # red       — error indicator
+    STATUS = 8      # dim       — status bar text
+    TROL_INV = 11   # white on red   — route badge
+    BUS_INV = 12    # white on blue  — route badge
+    EXPRESS_INV = 13  # white on green — route badge
+    # fmt: on
+
 
 # Custom color slot numbers (used when terminal supports init_color)
-CNUM_TROL = 8
-CNUM_BUS = 9
-CNUM_EXPRESS = 10
-CP_HEADER = 4  # white bold — header / column titles
-CP_SEP = 5  # dim white — separator lines
-CP_DUE = 6  # red bold  — imminent departure ("Due")
-CP_ERROR = 7  # red       — error indicator
-CP_STATUS = 8  # dim       — status bar text
+class ColorSlot(IntEnum):
+    TROL = 8
+    BUS = 9
+    EXPRESS = 10
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +140,7 @@ def parse_response(raw: bytes) -> tuple:
             continue
         try:
             dep = Departure(
-                type=parts[0].strip(),
+                type=VehicleType(parts[0].strip()),
                 route=parts[1].strip(),
                 direction=parts[2].strip(),
                 dep_secs=int(parts[3].strip()),
@@ -166,28 +180,28 @@ def format_due(dep_secs: int, tz: datetime.tzinfo) -> str:
     return dep_time.strftime("%H:%M")
 
 
-def type_char(t: str) -> str:
+def type_char(t: VehicleType) -> str:
     return {
-        "trol": "T",
-        "bus": "B",
-        "expressbus": "E",
+        VehicleType.TROL: "T",
+        VehicleType.BUS: "B",
+        VehicleType.EXPRESS: "E",
     }.get(t, "?")
 
 
-def color_pair_for_type(t: str) -> int:
+def color_pair_for_type(t: VehicleType) -> ColorPair:
     return {
-        "trol": CP_TROL,
-        "bus": CP_BUS,
-        "expressbus": CP_EXPRESS,
-    }.get(t, CP_BUS)
+        VehicleType.TROL: ColorPair.TROL,
+        VehicleType.BUS: ColorPair.BUS,
+        VehicleType.EXPRESS: ColorPair.EXPRESS,
+    }.get(t, ColorPair.BUS)
 
 
-def color_pair_inv_for_type(t: str) -> int:
+def color_pair_inv_for_type(t: VehicleType) -> ColorPair:
     return {
-        "trol": CP_TROL_INV,
-        "bus": CP_BUS_INV,
-        "expressbus": CP_EXPRESS_INV,
-    }.get(t, CP_BUS_INV)
+        VehicleType.TROL: ColorPair.TROL_INV,
+        VehicleType.BUS: ColorPair.BUS_INV,
+        VehicleType.EXPRESS: ColorPair.EXPRESS_INV,
+    }.get(t, ColorPair.BUS_INV)
 
 
 # ---------------------------------------------------------------------------
@@ -247,28 +261,28 @@ def init_colors() -> None:
     # (e.g. xterm-256color over SSH). Falls back to nearest standard color
     # on TERM=linux framebuffer console (Pi 1 with Waveshare display).
     if curses.can_change_color() and curses.COLORS >= 16:
-        curses.init_color(CNUM_TROL, *_rgb(220, 49, 49))  # red
-        curses.init_color(CNUM_BUS, *_rgb(0, 115, 172))  # blue
-        curses.init_color(CNUM_EXPRESS, *_rgb(0, 128, 0))  # green
-        trol_color = CNUM_TROL
-        bus_color = CNUM_BUS
-        express_color = CNUM_EXPRESS
+        curses.init_color(ColorSlot.TROL, *_rgb(220, 49, 49))  # red
+        curses.init_color(ColorSlot.BUS, *_rgb(0, 115, 172))  # blue
+        curses.init_color(ColorSlot.EXPRESS, *_rgb(0, 128, 0))  # green
+        trol_color = ColorSlot.TROL
+        bus_color = ColorSlot.BUS
+        express_color = ColorSlot.EXPRESS
     else:
         trol_color = curses.COLOR_RED
         bus_color = curses.COLOR_BLUE
         express_color = curses.COLOR_GREEN
 
-    curses.init_pair(CP_TROL, trol_color, -1)
-    curses.init_pair(CP_BUS, bus_color, -1)
-    curses.init_pair(CP_EXPRESS, express_color, -1)
-    curses.init_pair(CP_TROL_INV, curses.COLOR_WHITE, trol_color)
-    curses.init_pair(CP_BUS_INV, curses.COLOR_WHITE, bus_color)
-    curses.init_pair(CP_EXPRESS_INV, curses.COLOR_WHITE, express_color)
-    curses.init_pair(CP_HEADER, curses.COLOR_WHITE, -1)
-    curses.init_pair(CP_SEP, curses.COLOR_WHITE, -1)
-    curses.init_pair(CP_DUE, curses.COLOR_RED, -1)
-    curses.init_pair(CP_ERROR, curses.COLOR_RED, -1)
-    curses.init_pair(CP_STATUS, curses.COLOR_WHITE, -1)
+    curses.init_pair(ColorPair.TROL, trol_color, -1)
+    curses.init_pair(ColorPair.BUS, bus_color, -1)
+    curses.init_pair(ColorPair.EXPRESS, express_color, -1)
+    curses.init_pair(ColorPair.TROL_INV, curses.COLOR_WHITE, trol_color)
+    curses.init_pair(ColorPair.BUS_INV, curses.COLOR_WHITE, bus_color)
+    curses.init_pair(ColorPair.EXPRESS_INV, curses.COLOR_WHITE, express_color)
+    curses.init_pair(ColorPair.HEADER, curses.COLOR_WHITE, -1)
+    curses.init_pair(ColorPair.SEP, curses.COLOR_WHITE, -1)
+    curses.init_pair(ColorPair.DUE, curses.COLOR_RED, -1)
+    curses.init_pair(ColorPair.ERROR, curses.COLOR_RED, -1)
+    curses.init_pair(ColorPair.STATUS, curses.COLOR_WHITE, -1)
 
 
 def safe_addstr(
@@ -294,7 +308,7 @@ def safe_addstr(
 
 
 def draw_separator(win: curses.window, row: int, cols: int) -> None:
-    safe_addstr(win, row, 0, "\u2500" * (cols - 1), curses.color_pair(CP_SEP))
+    safe_addstr(win, row, 0, "\u2500" * (cols - 1), curses.color_pair(ColorPair.SEP))
 
 
 def draw_screen(
@@ -315,14 +329,14 @@ def draw_screen(
         safe_addstr(stdscr, 0, 0, "Terminal too small", curses.A_BOLD)
         return
 
-    bold = curses.color_pair(CP_HEADER) | curses.A_BOLD
-    dim = curses.color_pair(CP_SEP)
+    bold = curses.color_pair(ColorPair.HEADER) | curses.A_BOLD
+    dim = curses.color_pair(ColorPair.SEP)
 
     # --- Row 0: title + updated time ---
     title = f" Stop {stop_id or '?'}"
     if error_msg:
         status_right = f"ERR:{error_msg}"
-        status_attr = curses.color_pair(CP_ERROR) | curses.A_BOLD
+        status_attr = curses.color_pair(ColorPair.ERROR) | curses.A_BOLD
     elif last_updated:
         status_right = f"Updated {last_updated.strftime('%H:%M:%S')}"
         status_attr = dim
@@ -374,9 +388,11 @@ def draw_screen(
         due_str = format_due(dep.dep_secs, tz)
         t_char = type_char(dep.type)
         type_attr = curses.color_pair(color_pair_for_type(dep.type))
-        plain = curses.color_pair(CP_HEADER)
+        plain = curses.color_pair(ColorPair.HEADER)
         due_attr = (
-            curses.color_pair(CP_DUE) | curses.A_BOLD if due_str == "Due" else plain
+            curses.color_pair(ColorPair.DUE) | curses.A_BOLD
+            if due_str == "Due"
+            else plain
         )
 
         # Type char — colored + bold
