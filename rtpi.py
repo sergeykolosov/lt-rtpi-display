@@ -45,6 +45,7 @@ class Departure(NamedTuple):
 class AppState:
     departures: list = field(default_factory=list)
     stop_id: str = ""
+    stop_name: str | None = None
     last_updated: datetime.datetime | None = None
     error_msg: str | None = None
     refreshing: bool = False
@@ -93,6 +94,7 @@ _DEFAULTS = {
     },
     "api": {
         "base_url": "https://www.stops.lt/vilnius/departures2.php",
+        "stops_url": "https://www.stops.lt/vilnius/vilnius/stops.txt",
         "timeout": "10",
     },
 }
@@ -151,6 +153,33 @@ def parse_response(raw: bytes) -> tuple:
         except (ValueError, IndexError):
             continue
     return stop_id, departures
+
+
+def build_stops_url(cfg: configparser.ConfigParser, tz: datetime.tzinfo) -> str:
+    base = cfg.get("api", "stops_url")
+    now = datetime.datetime.now(tz)
+    t = now.replace(minute=0, second=0, microsecond=0)
+    ms = int(t.timestamp() * 1000)
+    return f"{base}?{ms}"
+
+
+def parse_stop_name(raw: bytes, stop_id: str) -> str | None:
+    """Return the name field for stop_id from stops.txt, or None if not found."""
+    text = raw.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        parts = line.split(";")
+        if len(parts) >= 6 and parts[0] == stop_id:
+            return parts[5].strip() or None
+    return None
+
+
+def fetch_stop_name(
+    cfg: configparser.ConfigParser, stop_id: str, tz: datetime.tzinfo
+) -> str | None:
+    url = build_stops_url(cfg, tz)
+    timeout = cfg.getint("api", "timeout")
+    raw = fetch_raw(url, timeout)
+    return parse_stop_name(raw, stop_id)
 
 
 # ---------------------------------------------------------------------------
@@ -230,9 +259,16 @@ def fetch_and_update(cfg: configparser.ConfigParser, state: AppState) -> None:
             state.error_msg = type(exc).__name__[:24]
 
 
-def background_worker(cfg: configparser.ConfigParser, state: AppState) -> None:
+def background_worker(
+    cfg: configparser.ConfigParser, state: AppState, tz: datetime.tzinfo
+) -> None:
     interval = cfg.getint("display", "refresh_interval")
-    # First fetch immediately
+    # Fetch stop name once at startup
+    with contextlib.suppress(Exception):
+        name = fetch_stop_name(cfg, state.stop_id, tz)
+        with state.lock:
+            state.stop_name = name
+    # First departure fetch immediately
     state.refreshing = True
     fetch_and_update(cfg, state)
     state.refreshing = False
@@ -315,6 +351,7 @@ def draw_screen(
     stdscr: curses.window,
     *,
     stop_id: str,
+    stop_name: str | None,
     departures: list[Departure],
     last_updated: datetime.datetime | None,
     error_msg: str | None,
@@ -333,7 +370,7 @@ def draw_screen(
     dim = curses.color_pair(ColorPair.SEP)
 
     # --- Row 0: title + updated time ---
-    title = f" Stop {stop_id or '?'}"
+    title = f" {stop_name}" if stop_name else f" Stop {stop_id or '?'}"
     if error_msg:
         status_right = f"ERR:{error_msg}"
         status_attr = curses.color_pair(ColorPair.ERROR) | curses.A_BOLD
@@ -458,7 +495,9 @@ def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
     # Start background fetch thread
-    worker = threading.Thread(target=background_worker, args=(cfg, state), daemon=True)
+    worker = threading.Thread(
+        target=background_worker, args=(cfg, state, tz), daemon=True
+    )
     worker.start()
 
     # Draw loop
@@ -472,6 +511,7 @@ def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
         with state.lock:
             departures = list(state.departures)
             sid = state.stop_id
+            sname = state.stop_name
             updated = state.last_updated
             error = state.error_msg
         refreshing = state.refreshing
@@ -479,6 +519,7 @@ def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
         draw_screen(
             stdscr,
             stop_id=sid,
+            stop_name=sname,
             departures=departures,
             last_updated=updated,
             error_msg=error,
