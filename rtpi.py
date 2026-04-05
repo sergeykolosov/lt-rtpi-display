@@ -5,12 +5,14 @@ Fetches real-time departure data from stops.lt API and renders a departure
 board on the terminal, designed for a Waveshare 3.2" display (~40x15 chars).
 """
 
+import argparse
 import configparser
 import contextlib
 import curses
 import datetime
 import locale
 import signal
+import sys
 import threading
 import time
 import urllib.error
@@ -30,6 +32,14 @@ class VehicleType(StrEnum):
     TROL = "trol"
     BUS = "bus"
     EXPRESS = "expressbus"
+
+
+class StopInfo(NamedTuple):
+    stop_id: str
+    name: str
+    direction: str
+    lat: str
+    lng: str
 
 
 class Departure(NamedTuple):
@@ -164,16 +174,45 @@ def build_stops_url(cfg: configparser.ConfigParser, tz: datetime.tzinfo) -> str:
     return f"{base}?{ms}"
 
 
-def parse_stop_info(raw: bytes, stop_id: str) -> tuple[str | None, str | None]:
-    """Return (name, direction) for stop_id from stops.txt, or (None, None)."""
+def _parse_stops_raw(raw: bytes) -> list[StopInfo]:
+    """Return (stop_id, name, direction, lat, lng) for every record in stops.txt.
+
+    Name is inherited from the previous record when the field is absent or empty
+    (stops.txt omits the Name field on duplicate-name consecutive records).
+    """
     text = raw.decode("utf-8", errors="replace")
+    result = []
+    last_name = ""
     for line in text.splitlines():
         parts = line.split(";")
-        if len(parts) >= 6 and parts[0] == stop_id:
-            name = parts[5].strip() or None
-            direction = parts[1].strip() or None
-            return name, direction
+        if not parts[0].strip():
+            continue
+        stop_id = parts[0].strip()
+        if stop_id.startswith("id") and stop_id[2:].isdigit():
+            continue
+        direction = parts[1].strip() if len(parts) > 1 else ""
+        lat = parts[2].strip() if len(parts) > 2 else ""
+        lng = parts[3].strip() if len(parts) > 3 else ""
+        name = parts[5].strip() if len(parts) > 5 else ""
+        if not name:
+            name = last_name
+        else:
+            last_name = name
+        result.append(StopInfo(stop_id, name, direction, lat, lng))
+    return result
+
+
+def parse_stop_info(raw: bytes, stop_id: str) -> tuple[str | None, str | None]:
+    """Return (name, direction) for stop_id from stops.txt, or (None, None)."""
+    for stop in _parse_stops_raw(raw):
+        if stop.stop_id == stop_id:
+            return stop.name or None, stop.direction or None
     return None, None
+
+
+def parse_all_stops(raw: bytes) -> list[StopInfo]:
+    """Return list of (stop_id, name, direction, lat, lng) for all stops."""
+    return _parse_stops_raw(raw)
 
 
 def fetch_stop_info(
@@ -183,6 +222,31 @@ def fetch_stop_info(
     timeout = cfg.getint("api", "timeout")
     raw = fetch_raw(url, timeout)
     return parse_stop_info(raw, stop_id)
+
+
+def list_stops(cfg: configparser.ConfigParser) -> None:
+    try:
+        tz = ZoneInfo(cfg.get("display", "timezone"))
+    except (ZoneInfoNotFoundError, KeyError):
+        tz = ZoneInfo("UTC")
+    url = build_stops_url(cfg, tz)
+    timeout = cfg.getint("api", "timeout")
+    raw = fetch_raw(url, timeout)
+    stops = parse_all_stops(raw)
+    is_tty = sys.stdout.isatty()
+    for stop in stops:
+        display_name = stop.name
+        if is_tty:
+            lat_f = lng_f = 0.0
+            try:
+                lat_f = int(stop.lat) / 100_000
+                lng_f = int(stop.lng) / 100_000
+            except ValueError:
+                pass
+            if lat_f and lng_f:
+                map_url = f"https://www.google.com/maps?q={lat_f},{lng_f}"
+                display_name = f"\033]8;;{map_url}\033\\{stop.name}\033]8;;\033\\"
+        print(f"{stop.stop_id:<6}  {display_name:<40}  {stop.direction}")  # noqa: T201
 
 
 # ---------------------------------------------------------------------------
@@ -554,8 +618,19 @@ def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
 
 
 def run() -> None:
+    parser = argparse.ArgumentParser(description="RTPI departure board")
+    parser.add_argument(
+        "-l", "--list", action="store_true", help="List all stops and exit"
+    )
+    args = parser.parse_args()
+
     config_path = Path(__file__).resolve().parent / "config.ini"
     cfg = load_config(config_path)
+
+    if args.list:
+        list_stops(cfg)
+        return
+
     with contextlib.suppress(KeyboardInterrupt):
         curses.wrapper(main, cfg)
 
