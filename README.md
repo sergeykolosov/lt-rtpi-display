@@ -1,4 +1,4 @@
-# pi-rtpi-display
+# lt-rtpi-display
 
 A lightweight terminal departure board for Vilnius public transport. Fetches real-time data from [stops.lt](https://www.stops.lt) and renders a curses TUI — no browser, no desktop, no dependencies beyond Python 3.11+ stdlib. For a dedicated kiosk on a small screen, see [Raspberry Pi kiosk setup](#raspberry-pi-kiosk-setup).
 
@@ -21,8 +21,8 @@ A lightweight terminal departure board for Vilnius public transport. Fetches rea
 ## Quick start
 
 ```bash
-git clone https://github.com/youruser/pi-rtpi-display
-cd pi-rtpi-display
+git clone https://github.com/youruser/lt-rtpi-display
+cd lt-rtpi-display
 python3 rtpi.py
 ```
 
@@ -89,10 +89,10 @@ This is the original use case: a dedicated departure board running on a Raspberr
 
 ```bash
 # On your development machine
-scp rtpi.py config.ini rtpi.service user@<pi-ip>:~/pi-rtpi-display/
+scp rtpi.py config.ini rtpi.service user@<pi-ip>:~/lt-rtpi-display/
 
 # On the Pi
-sudo cp ~/pi-rtpi-display/rtpi.service /etc/systemd/system/
+sudo cp ~/lt-rtpi-display/rtpi.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now rtpi.service
 ```

@@ -1,5 +1,5 @@
 [project]
-name = "pi-rtpi-display"
+name = "lt-rtpi-display"
 version = "0.1.0"
 description = "Lightweight terminal departure board for Vilnius public transport"
 readme = "README.md"

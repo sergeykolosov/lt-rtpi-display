@@ -8,8 +8,8 @@ After=getty@tty1.service
 [Service]
 Type=simple
 User=dietpi
-WorkingDirectory=/home/dietpi/pi-rtpi-display
-ExecStart=/usr/bin/python3 /home/dietpi/pi-rtpi-display/rtpi.py
+WorkingDirectory=/home/dietpi/lt-rtpi-display
+ExecStart=/usr/bin/python3 /home/dietpi/lt-rtpi-display/rtpi.py
 Restart=on-failure
 RestartSec=10
 StandardInput=tty-force
