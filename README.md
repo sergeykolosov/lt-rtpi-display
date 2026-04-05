@@ -23,7 +23,7 @@ Supported cities: Vilnius, Kaunas, Klaipėda, Panevėžys, Alytus, Druskininkai.
 ## Quick start
 
 ```bash
-git clone https://github.com/youruser/lt-rtpi-display
+git clone https://github.com/sergeykolosov/lt-rtpi-display
 cd lt-rtpi-display
 python3 rtpi.py
 ```

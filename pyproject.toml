@@ -4,7 +4,20 @@ version = "0.1.0"
 description = "Lightweight terminal departure board for public transport in Vilnius and other Lithuanian cities"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Sergey Kolosov" }]
+keywords = ["rtpi", "departure-board", "public-transport", "curses", "tui", "vilnius", "raspberry-pi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console :: Curses",
+    "Topic :: Utilities",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3.11",
+]
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/sergeykolosov/lt-rtpi-display"
 
 [dependency-groups]
 dev = [
