@@ -25,12 +25,17 @@ Supported cities: Vilnius, Kaunas, Klaipėda, Panevėžys, Alytus, Druskininkai.
 ```bash
 git clone https://github.com/sergeykolosov/lt-rtpi-display
 cd lt-rtpi-display
-python3 rtpi.py
+python3 rtpi.py --city vilnius 0103
 ```
 
 ## Configuration
 
-Edit `config.ini`:
+For permanent setup, copy the example config and edit:
+
+```bash
+mkdir -p ~/.config/lt-rtpi-display
+cp config.example.ini ~/.config/lt-rtpi-display/config.ini
+```
 
 ```ini
 [display]
@@ -38,17 +43,29 @@ city = vilnius           # Or kaunas/klaipeda/panevezys/alytus/druskininkai
 stop_ids = 0410, 0409    # Comma-separated stop IDs (at least one)
 ```
 
+Config lookup order (first found wins):
+
+1. `-c /path/to/config.ini` (explicit)
+2. `./config.ini` (current directory)
+3. `$XDG_CONFIG_HOME/lt-rtpi-display/config.ini` (usually `~/.config/...`)
+4. `/etc/lt-rtpi-display/config.ini` (system-wide, good for kiosk)
+5. Built-in defaults
+
 Find your stop ID on [stops.lt](https://www.stops.lt/vilnius/) — it appears in the URL when you select a stop. Use `python3 rtpi.py --list` to print all known stops, or `python3 rtpi.py --city kaunas --list` for another city.
 
-For the full list of configurable options see bundled [config.ini](./config.ini).
+For the full list of configurable options see [config.example.ini](./config.example.ini).
 
 ## CLI
 
 ```bash
-python3 rtpi.py [stop_id]              # Override configured stop(s)
-python3 rtpi.py --city klaipeda 0701   # Use a different city + specific stop
-python3 rtpi.py --list                 # List all stops and exit
-python3 rtpi.py --city kaunas -l       # List stops for another city
+python3 rtpi.py [stop_id]                   # Override configured stop
+python3 rtpi.py -c /path/config.ini         # Use a specific config file
+python3 rtpi.py --list                      # List all stops and exit
+
+# examples:
+python3 rtpi.py "0103, 0104"                # Run against multiple stops (switch with [n])
+python3 rtpi.py --city klaipeda 0901        # Use a different city + specific stop
+python3 rtpi.py --city kaunas --list        # List stops for another city
 ```
 
 ## Display
@@ -86,16 +103,17 @@ This is the original use case: a dedicated departure board running on a Raspberr
 ### Autostart (systemd)
 
 ```bash
-# On your development machine
-scp rtpi.py config.ini rtpi.service user@<pi-ip>:~/lt-rtpi-display/
-
 # On the Pi
-sudo cp ~/lt-rtpi-display/rtpi.service /etc/systemd/system/
+git clone https://github.com/sergeykolosov/lt-rtpi-display ~/lt-rtpi-display
+cd ~/lt-rtpi-display
+cp config.example.ini config.ini   # Edit to set your stop_ids
+
+sudo cp lt-rtpi-display.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now rtpi.service
+sudo systemctl enable --now lt-rtpi-display.service
 ```
 
-The included `rtpi.service` binds to `/dev/tty1` with `TERM=linux`, matching how dietpi-cloudshell works on the framebuffer console.
+The service picks up `./config.ini` from its `WorkingDirectory`. It binds to `/dev/tty1` with `TERM=linux`, matching how dietpi-cloudshell works on the framebuffer console.
 
 ### Physical buttons
 
@@ -114,3 +132,16 @@ key3_action =
 Available actions: `next_stop`, `next_page`.
 
 The user (e.g. `dietpi`) must be in the `gpio` group: `sudo usermod -aG gpio dietpi`.
+
+---
+
+## Development
+
+Requires [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv sync                    # Install dev dependencies
+uv run -- ruff check       # Lint
+uv run -- ruff format      # Format
+uv run -- mypy             # Type check
+```

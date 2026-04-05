@@ -1,5 +1,5 @@
 [Unit]
-Description=RTPI Departure Board
+Description=lt-rtpi-display — departure board
 After=network-online.target
 Wants=network-online.target
 Conflicts=getty@tty1.service
@@ -7,19 +7,32 @@ After=getty@tty1.service
 
 [Service]
 Type=simple
+# Adjust User and WorkingDirectory/ExecStart paths to match your setup.
+# The user must be in the "gpio" group for physical buttons.
 User=dietpi
 WorkingDirectory=/home/dietpi/lt-rtpi-display
 ExecStart=/usr/bin/python3 /home/dietpi/lt-rtpi-display/rtpi.py
 Restart=on-failure
 RestartSec=10
+
+# TTY binding (framebuffer console on the attached display)
 StandardInput=tty-force
 StandardOutput=tty
 TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
+
+# Locale / encoding
 Environment=PYTHONIOENCODING=utf-8
 Environment=LANG=en_US.UTF-8
 Environment=TERM=linux
+
+# Hardening — this service only needs network access and TTY/GPIO
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictRealtime=yes
 
 [Install]
 WantedBy=multi-user.target

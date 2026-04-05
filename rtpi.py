@@ -11,6 +11,7 @@ import contextlib
 import curses
 import datetime
 import locale
+import os
 import select
 import signal
 import subprocess  # noqa: S404
@@ -147,10 +148,32 @@ def _city_urls(city: str) -> tuple[str, str]:
     )
 
 
-def load_config(path: Path) -> configparser.ConfigParser:
+_APP_NAME = "lt-rtpi-display"
+
+
+def _config_candidates() -> list[Path]:
+    """Return config file paths in lookup order (first found wins)."""
+    xdg = os.environ.get("XDG_CONFIG_HOME", "")
+    home = Path.home()
+    paths = [Path("config.ini")]
+    if xdg:
+        paths.append(Path(xdg) / _APP_NAME / "config.ini")
+    else:
+        paths.append(home / ".config" / _APP_NAME / "config.ini")
+    paths.append(Path(f"/etc/{_APP_NAME}/config.ini"))
+    return paths
+
+
+def load_config(path: Path | None = None) -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
     cfg.read_dict(_DEFAULTS)
-    cfg.read(path)
+    if path:
+        cfg.read(path)
+    else:
+        for candidate in _config_candidates():
+            if candidate.is_file():
+                cfg.read(candidate)
+                break
     # Derive API URLs from city when not explicitly set in config.
     if not cfg.get("api", "base_url") or not cfg.get("api", "stops_url"):
         base, stops = _city_urls(cfg.get("display", "city"))
@@ -914,15 +937,14 @@ def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
 def run() -> None:
     parser = argparse.ArgumentParser(description="RTPI departure board")
     parser.add_argument("stop_id", nargs="?", help="Stop ID (overrides config)")
-    parser.add_argument(
-        "-c", "--city", help="City slug (e.g. vilnius, klaipeda, panevezys)"
-    )
+    parser.add_argument("-c", "--config", metavar="FILE", help="Path to config file")
+    parser.add_argument("--city", help="City slug (e.g. vilnius, klaipeda, panevezys)")
     parser.add_argument(
         "-l", "--list", action="store_true", help="List all stops and exit"
     )
     args = parser.parse_args()
 
-    config_path = Path(__file__).resolve().parent / "config.ini"
+    config_path = Path(args.config) if args.config else None
     cfg = load_config(config_path)
 
     if args.city:
