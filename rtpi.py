@@ -32,6 +32,7 @@ class VehicleType(StrEnum):
     TROL = "trol"
     BUS = "bus"
     EXPRESS = "expressbus"
+    NIGHT = "nightbus"
 
 
 class StopInfo(NamedTuple):
@@ -82,6 +83,8 @@ class ColorPair(IntEnum):
     TROL_INV = 11   # white on red   — route badge
     BUS_INV = 12    # white on blue  — route badge
     EXPRESS_INV = 13  # white on green — route badge
+    NIGHT = 14      # dark gray — night bus rgb(48, 48, 48)
+    NIGHT_INV = 15  # white on dark gray — route badge
     # fmt: on
 
 
@@ -90,6 +93,7 @@ class ColorSlot(IntEnum):
     TROL = 8
     BUS = 9
     EXPRESS = 10
+    NIGHT = 11
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +268,10 @@ def format_due(dep_secs: int, tz: datetime.tzinfo) -> str:
     # Midnight rollover: huge negative means next-day departure
     if diff < -300:
         diff += 86400
+    # Post-midnight service day: API uses 24h+ notation (e.g. 25:30 = 91800s)
+    # while seconds_since_midnight resets at 00:00
+    if diff > 43200:
+        diff -= 86400
     minutes = diff // 60
     if minutes < 1:
         return "Due"
@@ -281,6 +289,7 @@ def type_char(t: VehicleType) -> str:
         VehicleType.TROL: "T",
         VehicleType.BUS: "B",
         VehicleType.EXPRESS: "E",
+        VehicleType.NIGHT: "N",
     }.get(t, "?")
 
 
@@ -289,6 +298,7 @@ def color_pair_for_type(t: VehicleType) -> ColorPair:
         VehicleType.TROL: ColorPair.TROL,
         VehicleType.BUS: ColorPair.BUS,
         VehicleType.EXPRESS: ColorPair.EXPRESS,
+        VehicleType.NIGHT: ColorPair.NIGHT,
     }.get(t, ColorPair.BUS)
 
 
@@ -297,6 +307,7 @@ def color_pair_inv_for_type(t: VehicleType) -> ColorPair:
         VehicleType.TROL: ColorPair.TROL_INV,
         VehicleType.BUS: ColorPair.BUS_INV,
         VehicleType.EXPRESS: ColorPair.EXPRESS_INV,
+        VehicleType.NIGHT: ColorPair.NIGHT_INV,
     }.get(t, ColorPair.BUS_INV)
 
 
@@ -368,13 +379,16 @@ def init_colors() -> None:
         curses.init_color(ColorSlot.TROL, *_rgb(220, 49, 49))  # red
         curses.init_color(ColorSlot.BUS, *_rgb(0, 115, 172))  # blue
         curses.init_color(ColorSlot.EXPRESS, *_rgb(0, 128, 0))  # green
+        curses.init_color(ColorSlot.NIGHT, *_rgb(48, 48, 48))  # dark gray
         trol_color = ColorSlot.TROL
         bus_color = ColorSlot.BUS
         express_color = ColorSlot.EXPRESS
+        night_color = ColorSlot.NIGHT
     else:
         trol_color = curses.COLOR_RED
         bus_color = curses.COLOR_BLUE
         express_color = curses.COLOR_GREEN
+        night_color = curses.COLOR_BLACK
 
     curses.init_pair(ColorPair.TROL, trol_color, -1)
     curses.init_pair(ColorPair.BUS, bus_color, -1)
@@ -382,6 +396,8 @@ def init_colors() -> None:
     curses.init_pair(ColorPair.TROL_INV, curses.COLOR_WHITE, trol_color)
     curses.init_pair(ColorPair.BUS_INV, curses.COLOR_WHITE, bus_color)
     curses.init_pair(ColorPair.EXPRESS_INV, curses.COLOR_WHITE, express_color)
+    curses.init_pair(ColorPair.NIGHT, night_color, -1)
+    curses.init_pair(ColorPair.NIGHT_INV, curses.COLOR_WHITE, night_color)
     curses.init_pair(ColorPair.HEADER, curses.COLOR_WHITE, -1)
     curses.init_pair(ColorPair.SEP, curses.COLOR_WHITE, -1)
     curses.init_pair(ColorPair.DUE, curses.COLOR_RED, -1)
@@ -509,7 +525,8 @@ def draw_screen(
         safe_addstr(stdscr, row, 1, t_char, type_attr | curses.A_BOLD)
 
         # Route — white text on solid transport-color block
-        route_padded = dep.route[:route_width].rjust(route_width)
+        route_str = dep.route[:route_width].upper()
+        route_padded = route_str.rjust(route_width - 1).ljust(route_width)
         inv_attr = curses.color_pair(color_pair_inv_for_type(dep.type)) | curses.A_BOLD
         safe_addstr(stdscr, row, 3, route_padded, inv_attr)
 
