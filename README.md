@@ -1,6 +1,6 @@
 # lt-rtpi-display
 
-A lightweight terminal departure board for Vilnius public transport. Fetches real-time data from [stops.lt](https://www.stops.lt) and renders a curses TUI — no browser, no desktop, no dependencies beyond Python 3.11+ stdlib. For a dedicated kiosk on a small screen, see [Raspberry Pi kiosk setup](#raspberry-pi-kiosk-setup).
+A lightweight terminal departure board for public transport in Vilnius and other Lithuanian cities. Fetches real-time data from [stops.lt](https://www.stops.lt) API and renders a curses TUI — no browser, no desktop, no dependencies beyond Python 3.11+ stdlib. For a dedicated kiosk on a small screen, see [Raspberry Pi kiosk setup](#raspberry-pi-kiosk-setup).
 
 ```text
  MO muziejus | link centro
@@ -18,6 +18,8 @@ A lightweight terminal departure board for Vilnius public transport. Fetches rea
  22:41:08  [j] page 1/3 [n]ext [q]uit
 ```
 
+Supported cities: Vilnius, Kaunas, Klaipėda, Panevėžys, Alytus, Druskininkai.
+
 ## Quick start
 
 ```bash
@@ -32,15 +34,33 @@ Edit `config.ini`:
 
 ```ini
 [display]
-stop_ids = 0410, 0409   # Comma-separated stop IDs to cycle through
-refresh_interval = 30    # Seconds between API fetches
-timezone = Europe/Vilnius
-
-[api]
-timeout = 10            # HTTP request timeout in seconds
+city = vilnius           # Or kaunas/klaipeda/panevezys/alytus/druskininkai
+stop_ids = 0410, 0409    # Comma-separated stop IDs (at least one)
 ```
 
-Find your stop ID on [stops.lt](https://www.stops.lt/vilnius/) — it appears in the URL when you select a stop. Use `python3 rtpi.py --list` to print all known stops.
+Find your stop ID on [stops.lt](https://www.stops.lt/vilnius/) — it appears in the URL when you select a stop. Use `python3 rtpi.py --list` to print all known stops, or `python3 rtpi.py --city kaunas --list` for another city.
+
+For the full list of configurable options see bundled [config.ini](./config.ini).
+
+## CLI
+
+```bash
+python3 rtpi.py [stop_id]              # Override configured stop(s)
+python3 rtpi.py --city klaipeda 0701   # Use a different city + specific stop
+python3 rtpi.py --list                 # List all stops and exit
+python3 rtpi.py --city kaunas -l       # List stops for another city
+```
+
+## Display
+
+| Column | Content |
+|--------|---------|
+| T | **T** = trolleybus, **B** = bus, **E** = express bus, **N** = night bus |
+| Rte | Route number (colored badge) |
+| Destination | Final stop name |
+| Due | `Due` (red) = imminent, `Xm` = minutes, `HH:MM` = scheduled |
+
+Uses brand colors matching Vilnius public transport: red for trolleybuses, blue for buses, green for express, etc. Exact RGB when the terminal supports custom colors, nearest standard color otherwise.
 
 ## Keyboard controls
 
@@ -50,28 +70,6 @@ Find your stop ID on [stops.lt](https://www.stops.lt/vilnius/) — it appears in
 | `k` | Previous page |
 | `n` | Next stop |
 | `q` / `Esc` | Quit |
-
-## CLI
-
-```
-python3 rtpi.py [stop_id]     # Override configured stop
-python3 rtpi.py --list        # List all stops and exit
-```
-
-## Display
-
-| Column | Content |
-|--------|---------|
-| T | **T** = trolleybus, **B** = bus, **E** = express bus |
-| Rte | Route number (colored badge) |
-| Destination | Final stop name |
-| Due | `Due` (red) = imminent, `Xm` = minutes, `HH:MM` = scheduled |
-
-Uses brand colors matching Vilnius public transport: red for trolleybuses, blue for buses, green for express. Exact RGB when the terminal supports custom colors, nearest standard color otherwise.
-
-## Data source
-
-Departure data is fetched from the [stops.lt](https://www.stops.lt) public API (Vilnius, Lithuania).
 
 ---
 
@@ -113,6 +111,6 @@ key2_action = next_page
 key3_action =
 ```
 
-The `dietpi` user must be in the `gpio` group: `sudo usermod -aG gpio dietpi`.
-
 Available actions: `next_stop`, `next_page`.
+
+The user (e.g. `dietpi`) must be in the `gpio` group: `sudo usermod -aG gpio dietpi`.

@@ -116,13 +116,14 @@ class ColorSlot(IntEnum):
 
 _DEFAULTS = {
     "display": {
-        "stop_ids": "0410",
+        "city": "vilnius",
+        "stop_ids": "0103, 0104",  # Europos aikštė (eastbound, westbound)
         "refresh_interval": "30",
         "timezone": "Europe/Vilnius",
     },
     "api": {
-        "base_url": "https://www.stops.lt/vilnius/departures2.php",
-        "stops_url": "https://www.stops.lt/vilnius/vilnius/stops.txt",
+        "base_url": "",
+        "stops_url": "",
         "timeout": "10",
     },
     # Waveshare 3.2" RPi LCD (B): physical pins 12/16/18 → BCM 18/23/24
@@ -137,10 +138,26 @@ _DEFAULTS = {
 }
 
 
+def _city_urls(city: str) -> tuple[str, str]:
+    """Return (base_url, stops_url) derived from *city* slug."""
+    c = city.lower().strip()
+    return (
+        f"https://www.stops.lt/{c}/departures2.php",
+        f"https://www.stops.lt/{c}/{c}/stops.txt",
+    )
+
+
 def load_config(path: Path) -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
     cfg.read_dict(_DEFAULTS)
     cfg.read(path)
+    # Derive API URLs from city when not explicitly set in config.
+    if not cfg.get("api", "base_url") or not cfg.get("api", "stops_url"):
+        base, stops = _city_urls(cfg.get("display", "city"))
+        if not cfg.get("api", "base_url"):
+            cfg.set("api", "base_url", base)
+        if not cfg.get("api", "stops_url"):
+            cfg.set("api", "stops_url", stops)
     return cfg
 
 
@@ -177,13 +194,18 @@ def parse_response(raw: bytes) -> tuple:
         if len(parts) < 6:
             continue
         try:
+            # Kaunas inserts a numeric trip-ID at index 5;
+            # destination shifts to index 6.
+            dest_idx = 5
+            if len(parts) >= 7 and parts[5].strip().isdigit():
+                dest_idx = 6
             dep = Departure(
                 type=VehicleType(parts[0].strip()),
                 route=parts[1].strip(),
                 direction=parts[2].strip(),
                 dep_secs=int(parts[3].strip()),
                 vehicle_id=parts[4].strip(),
-                destination=parts[5].strip(),
+                destination=parts[dest_idx].strip(),
             )
             departures.append(dep)
         except (ValueError, IndexError):
@@ -202,28 +224,63 @@ def build_stops_url(cfg: configparser.ConfigParser, tz: datetime.tzinfo) -> str:
 def _parse_stops_raw(raw: bytes) -> list[StopInfo]:
     """Return (stop_id, name, direction, lat, lng) for every record in stops.txt.
 
-    Name is inherited from the previous record when the field is absent or empty
-    (stops.txt omits the Name field on duplicate-name consecutive records).
+    The header row is parsed to discover column positions (e.g. Kaunas has an
+    extra SiriID column).  Name is inherited from the previous record when the
+    field is absent or empty (stops.txt omits the Name field on duplicate-name
+    consecutive records).
     """
     text = raw.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    if not lines:
+        return []
+
+    # Detect column layout from the header row.
+    header = [c.strip().lower() for c in lines[0].split(";")]
+    col = {}
+    for name_key, aliases in (
+        ("id", ("id",)),
+        ("direction", ("direction",)),
+        ("lat", ("lat",)),
+        ("lng", ("lng",)),
+        ("name", ("name",)),
+    ):
+        for i, h in enumerate(header):
+            if h in aliases:
+                col[name_key] = i
+                break
+
+    # Fallback to Vilnius-format indices when header detection fails.
+    col.setdefault("id", 0)
+    col.setdefault("direction", 1)
+    col.setdefault("lat", 2)
+    col.setdefault("lng", 3)
+    col.setdefault("name", 5)
+
+    def _get(parts: list[str], key: str) -> str:
+        idx = col[key]
+        return parts[idx].strip() if idx < len(parts) else ""
+
     result = []
     last_name = ""
-    for line in text.splitlines():
+    for line in lines[1:]:  # skip header
         parts = line.split(";")
-        if not parts[0].strip():
+        stop_id = _get(parts, "id")
+        if not stop_id:
             continue
-        stop_id = parts[0].strip()
-        if stop_id.startswith("id") and stop_id[2:].isdigit():
-            continue
-        direction = parts[1].strip() if len(parts) > 1 else ""
-        lat = parts[2].strip() if len(parts) > 2 else ""
-        lng = parts[3].strip() if len(parts) > 3 else ""
-        name = parts[5].strip() if len(parts) > 5 else ""
+        name = _get(parts, "name")
         if not name:
             name = last_name
         else:
             last_name = name
-        result.append(StopInfo(stop_id, name, direction, lat, lng))
+        result.append(
+            StopInfo(
+                stop_id,
+                name,
+                _get(parts, "direction"),
+                _get(parts, "lat"),
+                _get(parts, "lng"),
+            )
+        )
     return result
 
 
@@ -236,8 +293,9 @@ def parse_stop_info(raw: bytes, stop_id: str) -> tuple[str | None, str | None]:
 
 
 def parse_all_stops(raw: bytes) -> list[StopInfo]:
-    """Return list of (stop_id, name, direction, lat, lng) for all stops."""
-    return _parse_stops_raw(raw)
+    """Return displayable stops (those with valid coordinates)."""
+    skip = ("", "0")
+    return [s for s in _parse_stops_raw(raw) if s.lat not in skip or s.lng not in skip]
 
 
 def fetch_stop_info(
@@ -857,6 +915,9 @@ def run() -> None:
     parser = argparse.ArgumentParser(description="RTPI departure board")
     parser.add_argument("stop_id", nargs="?", help="Stop ID (overrides config)")
     parser.add_argument(
+        "-c", "--city", help="City slug (e.g. vilnius, klaipeda, panevezys)"
+    )
+    parser.add_argument(
         "-l", "--list", action="store_true", help="List all stops and exit"
     )
     args = parser.parse_args()
@@ -864,9 +925,19 @@ def run() -> None:
     config_path = Path(__file__).resolve().parent / "config.ini"
     cfg = load_config(config_path)
 
+    if args.city:
+        cfg.set("display", "city", args.city)
+        # Re-derive API URLs for the new city.
+        base, stops = _city_urls(args.city)
+        cfg.set("api", "base_url", base)
+        cfg.set("api", "stops_url", stops)
+
     if args.list:
         list_stops(cfg)
         return
+
+    if args.city and not args.stop_id:
+        parser.error("--city requires a stop ID (stop IDs differ between cities)")
 
     if args.stop_id:
         cfg.set("display", "stop_ids", args.stop_id)

@@ -1,7 +1,7 @@
 [project]
 name = "lt-rtpi-display"
 version = "0.1.0"
-description = "Lightweight terminal departure board for Vilnius public transport"
+description = "Lightweight terminal departure board for public transport in Vilnius and other Lithuanian cities"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
