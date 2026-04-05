@@ -598,10 +598,10 @@ def init_colors() -> None:
         curses.init_color(ColorSlot.BUS, *_rgb(0, 115, 172))  # blue
         curses.init_color(ColorSlot.EXPRESS, *_rgb(0, 128, 0))  # green
         curses.init_color(ColorSlot.NIGHT, *_rgb(48, 48, 48))  # dark gray
-        trol_color = ColorSlot.TROL
-        bus_color = ColorSlot.BUS
-        express_color = ColorSlot.EXPRESS
-        night_color = ColorSlot.NIGHT
+        trol_color: int = ColorSlot.TROL
+        bus_color: int = ColorSlot.BUS
+        express_color: int = ColorSlot.EXPRESS
+        night_color: int = ColorSlot.NIGHT
     else:
         trol_color = curses.COLOR_RED
         bus_color = curses.COLOR_BLUE
