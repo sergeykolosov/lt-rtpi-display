@@ -99,3 +99,20 @@ sudo systemctl enable --now rtpi.service
 
 The included `rtpi.service` binds to `/dev/tty1` with `TERM=linux`, matching how dietpi-cloudshell works on the framebuffer console.
 
+### Physical buttons
+
+The Waveshare 3.2" LCD (B) has three GPIO buttons (K1/K2/K3). Configure actions in `config.ini`:
+
+```ini
+[gpio]
+key1_pin = 18
+key2_pin = 23
+key3_pin = 24
+key1_action = next_stop
+key2_action = next_page
+key3_action =
+```
+
+The `dietpi` user must be in the `gpio` group: `sudo usermod -aG gpio dietpi`.
+
+Available actions: `next_stop`, `next_page`.

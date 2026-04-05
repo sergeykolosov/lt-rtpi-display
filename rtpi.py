@@ -11,17 +11,23 @@ import contextlib
 import curses
 import datetime
 import locale
+import select
 import signal
+import subprocess  # noqa: S404
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+if TYPE_CHECKING:
+    from io import TextIOWrapper
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -118,6 +124,15 @@ _DEFAULTS = {
         "base_url": "https://www.stops.lt/vilnius/departures2.php",
         "stops_url": "https://www.stops.lt/vilnius/vilnius/stops.txt",
         "timeout": "10",
+    },
+    # Waveshare 3.2" RPi LCD (B): physical pins 12/16/18 → BCM 18/23/24
+    "gpio": {
+        "key1_pin": "18",
+        "key2_pin": "23",
+        "key3_pin": "24",
+        "key1_action": "next_stop",
+        "key2_action": "next_page",
+        "key3_action": "",
     },
 }
 
@@ -397,6 +412,113 @@ def _action_next_page(state: AppState) -> None:
 
 
 # ---------------------------------------------------------------------------
+# GPIO button handling (Waveshare 3.2" RPi LCD B, pins 12/16/18 → BCM 18/23/24)
+# ---------------------------------------------------------------------------
+
+
+_GPIO_ROOT = Path("/sys/class/gpio")
+_GPIO_DEBOUNCE_S = 0.3
+
+
+def _gpio_chip_base() -> int:
+    """Return the sysfs GPIO base offset for the bcm2835 gpiochip."""
+    for chip in _GPIO_ROOT.glob("gpiochip*"):
+        label_path = chip / "label"
+        if label_path.exists() and "bcm2835" in label_path.read_text():
+            return int((chip / "base").read_text().strip())
+    return 0  # legacy kernels use base 0
+
+
+def _gpio_set_pullup(bcm_pin: int) -> None:
+    for cmd in (
+        ["raspi-gpio", "set", str(bcm_pin), "pu"],
+        ["pinctrl", "set", str(bcm_pin), "ip", "pu"],
+    ):
+        with contextlib.suppress(FileNotFoundError, OSError):
+            if subprocess.run(cmd, capture_output=True, check=False).returncode == 0:  # noqa: S603
+                return
+
+
+_GPIO_ACTIONS: dict[str, Callable[[AppState], None]] = {
+    "next_stop": _action_next_stop,
+    "next_page": _action_next_page,
+}
+
+
+def _gpio_watch(pin_actions: dict[int, tuple[str, str]], state: AppState) -> None:
+    """Background thread: epoll on sysfs value files, dispatch actions on press."""
+    fds: dict[int, tuple[TextIOWrapper, str, str]] = {}
+    for pin, (label, action) in pin_actions.items():
+        with contextlib.suppress(OSError):
+            fd = (_GPIO_ROOT / f"gpio{pin}" / "value").open()
+            fd.read()  # initial read to arm the edge interrupt
+            fds[fd.fileno()] = (fd, label, action)
+    if not fds or not hasattr(select, "epoll"):
+        return
+    ep = select.epoll()  # type: ignore[attr-defined]
+    for fileno in fds:
+        ep.register(fileno, select.EPOLLPRI | select.EPOLLERR)  # type: ignore[attr-defined]
+    last_press: dict[int, float] = {}
+    try:
+        while not state.stop_event.is_set():
+            for fileno, _ in ep.poll(timeout=1.0):
+                fd, label, action = fds[fileno]
+                fd.seek(0)
+                val = fd.read().strip()
+                now = time.monotonic()
+                if val == "0" and now - last_press.get(fileno, 0) >= _GPIO_DEBOUNCE_S:
+                    last_press[fileno] = now
+                    handler = _GPIO_ACTIONS.get(action)
+                    if handler:
+                        handler(state)
+    finally:
+        ep.close()
+        for fd, _, _ in fds.values():
+            fd.close()
+
+
+def setup_gpio(cfg: configparser.ConfigParser, state: AppState) -> list[int]:
+    """Export sysfs GPIO pins for K1/K2/K3 and start edge-detect thread."""
+    if not _GPIO_ROOT.is_dir() or not hasattr(select, "epoll"):
+        return []
+    keys = {
+        "K1": (cfg.getint("gpio", "key1_pin"), cfg.get("gpio", "key1_action")),
+        "K2": (cfg.getint("gpio", "key2_pin"), cfg.get("gpio", "key2_action")),
+        "K3": (cfg.getint("gpio", "key3_pin"), cfg.get("gpio", "key3_action")),
+    }
+    base = _gpio_chip_base()
+    exported: dict[int, tuple[str, str]] = {}
+    for label, (bcm, action) in keys.items():
+        sysfs_pin = bcm + base
+        _gpio_set_pullup(bcm)
+        try:
+            pin_dir = _GPIO_ROOT / f"gpio{sysfs_pin}"
+            if not pin_dir.exists():
+                (_GPIO_ROOT / "export").write_text(str(sysfs_pin))
+                time.sleep(0.1)
+            if (pin_dir / "direction").read_text().strip() != "in":
+                (pin_dir / "direction").write_text("in")
+            if (pin_dir / "edge").read_text().strip() != "falling":
+                (pin_dir / "edge").write_text("falling")
+            exported[sysfs_pin] = (label, action)
+        except OSError:
+            pin_dir = _GPIO_ROOT / f"gpio{sysfs_pin}"
+            if pin_dir.exists() and (pin_dir / "edge").read_text().strip() == "falling":
+                exported[sysfs_pin] = (label, action)
+    if exported:
+        threading.Thread(
+            target=_gpio_watch, args=(exported, state), daemon=True
+        ).start()
+    return list(exported)
+
+
+def teardown_gpio(pins: list[int]) -> None:
+    for pin in pins:
+        with contextlib.suppress(OSError):
+            (_GPIO_ROOT / "unexport").write_text(str(pin))
+
+
+# ---------------------------------------------------------------------------
 # Curses drawing
 # ---------------------------------------------------------------------------
 
@@ -673,6 +795,9 @@ def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
     signal.signal(signal.SIGTERM, _sigterm)
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
+    # Set up physical buttons (no-op if RPi.GPIO not available)
+    gpio_pins = setup_gpio(cfg, state)
+
     # Start background fetch thread
     worker = threading.Thread(
         target=background_worker, args=(cfg, state, tz), daemon=True
@@ -719,6 +844,7 @@ def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
     # Clean shutdown
     state.stop_event.set()
     worker.join(timeout=2)
+    teardown_gpio(gpio_pins)
     curses.endwin()
 
 
