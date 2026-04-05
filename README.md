@@ -1,9 +1,9 @@
 # pi-rtpi-display
 
-Real-Time Passenger Information (RTPI) departure board for Raspberry Pi, designed to run in a TTY on a [Waveshare 3.2" display](https://www.waveshare.com/3.2inch-rpi-lcd-b.htm) running [DietPi](https://dietpi.com/). Works exactly like dietpi-cloudshell — no desktop, no browser, no GPU.
+A lightweight terminal departure board for Vilnius public transport. Fetches real-time data from [stops.lt](https://www.stops.lt) and renders a curses TUI — no browser, no desktop, no dependencies beyond Python 3.11+ stdlib. For a dedicated kiosk on a small screen, see [Raspberry Pi kiosk setup](#raspberry-pi-kiosk-setup).
 
-```
- Stop 0410           Updated 15:29:05
+```text
+ MO muziejus | link centro
 ─────────────────────────────────────
  T  Rte  Destination              Due
 ─────────────────────────────────────
@@ -15,14 +15,8 @@ Real-Time Passenger Information (RTPI) departure board for Raspberry Pi, designe
  T    7  Perkūnkiemis             12m
  B   88  Europos aikštė           14m
 ─────────────────────────────────────
-                             [q] quit
+ 22:41:08  [j] page 1/3 [n]ext [q]uit
 ```
-
-## Requirements
-
-- Raspberry Pi (tested on Pi 1)
-- Python 3 (`sudo apt install python3`) — **no pip installs needed**
-- Network access to `stops.lt`
 
 ## Quick start
 
@@ -32,59 +26,76 @@ cd pi-rtpi-display
 python3 rtpi.py
 ```
 
-Press `q`, `Q`, or `Esc` to exit.
-
 ## Configuration
 
 Edit `config.ini`:
 
 ```ini
 [display]
-stop_id = 0410          # Stop ID from stops.lt
-refresh_interval = 30   # Seconds between API fetches
-max_departures = 20     # Max rows to display
+stop_ids = 0410, 0409   # Comma-separated stop IDs to cycle through
+refresh_interval = 30    # Seconds between API fetches
+timezone = Europe/Vilnius
 
 [api]
-base_url = https://www.stops.lt/vilnius/departures2.php
 timeout = 10            # HTTP request timeout in seconds
 ```
 
-Find your stop ID on [stops.lt](https://www.stops.lt/vilnius/) — it appears in the URL when you select a stop.
+Find your stop ID on [stops.lt](https://www.stops.lt/vilnius/) — it appears in the URL when you select a stop. Use `python3 rtpi.py --list` to print all known stops.
 
-## Autostart on boot (systemd)
+## Keyboard controls
 
-Copy the files to the Pi and install the service:
+| Key | Action |
+|-----|--------|
+| `j` | Next page |
+| `k` | Previous page |
+| `n` | Next stop |
+| `q` / `Esc` | Quit |
 
-```bash
-# On your development machine
-scp rtpi.py config.ini rtpi.service dietpi@<pi-ip>:/home/dietpi/pi-rtpi-display/
+## CLI
 
-# On the Pi
-sudo cp /home/dietpi/pi-rtpi-display/rtpi.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable rtpi.service
-sudo systemctl start rtpi.service
 ```
-
-Check status:
-
-```bash
-sudo systemctl status rtpi.service
+python3 rtpi.py [stop_id]     # Override configured stop
+python3 rtpi.py --list        # List all stops and exit
 ```
-
-The service binds to `/dev/tty1` (the physical display) with `TERM=linux`, matching how dietpi-cloudshell works on the Waveshare framebuffer console.
 
 ## Display
 
-| Column | Values |
-|--------|--------|
-| T | **T** = trolleybus (cyan), **B** = bus (green), **E** = express bus (yellow) |
-| Rte | Route number |
+| Column | Content |
+|--------|---------|
+| T | **T** = trolleybus, **B** = bus, **E** = express bus |
+| Rte | Route number (colored badge) |
 | Destination | Final stop name |
-| Due | `Due` = imminent (red), `Xm` = minutes, `HH:MM` = scheduled time |
+| Due | `Due` (red) = imminent, `Xm` = minutes, `HH:MM` = scheduled |
 
-If the API is unreachable, the last fetched data remains visible with an error indicator in the top-right corner.
+Uses brand colors matching Vilnius public transport: red for trolleybuses, blue for buses, green for express. Exact RGB when the terminal supports custom colors, nearest standard color otherwise.
 
 ## Data source
 
 Departure data is fetched from the [stops.lt](https://www.stops.lt) public API (Vilnius, Lithuania).
+
+---
+
+## Raspberry Pi kiosk setup
+
+This is the original use case: a dedicated departure board running on a Raspberry Pi 1 with a [Waveshare 3.2" RPi LCD (B)](https://www.waveshare.com/3.2inch-rpi-lcd-b.htm) on [DietPi](https://dietpi.com/) — no desktop, just the framebuffer console on `/dev/tty1`.
+
+### Requirements
+
+- Raspberry Pi (tested on Pi 1)
+- Python 3.11+ (`sudo apt install python3`)
+- Network access to `stops.lt`
+
+### Autostart (systemd)
+
+```bash
+# On your development machine
+scp rtpi.py config.ini rtpi.service user@<pi-ip>:~/pi-rtpi-display/
+
+# On the Pi
+sudo cp ~/pi-rtpi-display/rtpi.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now rtpi.service
+```
+
+The included `rtpi.service` binds to `/dev/tty1` with `TERM=linux`, matching how dietpi-cloudshell works on the framebuffer console.
+

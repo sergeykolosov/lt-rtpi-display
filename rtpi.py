@@ -55,14 +55,22 @@ class Departure(NamedTuple):
 @dataclass
 class AppState:
     departures: list = field(default_factory=list)
-    stop_id: str = ""
+    stop_ids: list[str] = field(default_factory=list)
+    stop_index: int = 0
     stop_name: str | None = None
     stop_direction: str | None = None
     last_updated: datetime.datetime | None = None
     error_msg: str | None = None
     refreshing: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
+    page_offset: int = 0
     stop_event: threading.Event = field(default_factory=threading.Event)
+    refresh_now: threading.Event = field(default_factory=threading.Event)
+
+    def current_stop_id(self) -> str:
+        if self.stop_ids:
+            return self.stop_ids[self.stop_index % len(self.stop_ids)]
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -102,9 +110,8 @@ class ColorSlot(IntEnum):
 
 _DEFAULTS = {
     "display": {
-        "stop_id": "0410",
+        "stop_ids": "0410",
         "refresh_interval": "30",
-        "max_departures": "20",
         "timezone": "Europe/Vilnius",
     },
     "api": {
@@ -127,9 +134,8 @@ def load_config(path: Path) -> configparser.ConfigParser:
 # ---------------------------------------------------------------------------
 
 
-def build_url(cfg: configparser.ConfigParser) -> str:
+def build_url(cfg: configparser.ConfigParser, stop_id: str) -> str:
     base = cfg.get("api", "base_url")
-    stop_id = cfg.get("display", "stop_id")
     ms = int(time.time() * 1000)
     return f"{base}?stopid={stop_id}&time={ms}"
 
@@ -318,14 +324,12 @@ def color_pair_inv_for_type(t: VehicleType) -> ColorPair:
 
 def fetch_and_update(cfg: configparser.ConfigParser, state: AppState) -> None:
     timeout = cfg.getint("api", "timeout")
-    url = build_url(cfg)
+    url = build_url(cfg, state.current_stop_id())
     try:
         raw = fetch_raw(url, timeout)
-        stop_id, deps = parse_response(raw)
+        _, deps = parse_response(raw)
         with state.lock:
             state.departures = deps
-            if stop_id:
-                state.stop_id = stop_id
             state.last_updated = datetime.datetime.now(datetime.UTC)
             state.error_msg = None
     except urllib.error.URLError as exc:
@@ -337,25 +341,59 @@ def fetch_and_update(cfg: configparser.ConfigParser, state: AppState) -> None:
             state.error_msg = type(exc).__name__[:24]
 
 
+def _fetch_stop_metadata(
+    cfg: configparser.ConfigParser, state: AppState, tz: datetime.tzinfo
+) -> None:
+    """Fetch and store stop name + direction for the current stop."""
+    with contextlib.suppress(Exception):
+        name, direction = fetch_stop_info(cfg, state.current_stop_id(), tz)
+        with state.lock:
+            state.stop_name = name
+            state.stop_direction = direction
+
+
 def background_worker(
     cfg: configparser.ConfigParser, state: AppState, tz: datetime.tzinfo
 ) -> None:
     interval = cfg.getint("display", "refresh_interval")
-    # Fetch stop name once at startup
-    with contextlib.suppress(Exception):
-        name, direction = fetch_stop_info(cfg, state.stop_id, tz)
-        with state.lock:
-            state.stop_name = name
-            state.stop_direction = direction
+    _fetch_stop_metadata(cfg, state, tz)
     # First departure fetch immediately
     state.refreshing = True
     fetch_and_update(cfg, state)
     state.refreshing = False
-    # Then loop
-    while not state.stop_event.wait(interval):
+    # Then loop — wake early on refresh_now (e.g. stop change)
+    while not state.stop_event.is_set():
+        triggered = state.refresh_now.wait(interval)
+        if state.stop_event.is_set():
+            break
+        if triggered:
+            state.refresh_now.clear()
+            _fetch_stop_metadata(cfg, state, tz)
         state.refreshing = True
         fetch_and_update(cfg, state)
         state.refreshing = False
+
+
+# ---------------------------------------------------------------------------
+# Actions
+# ---------------------------------------------------------------------------
+
+
+def _action_next_stop(state: AppState) -> None:
+    with state.lock:
+        state.stop_index = (state.stop_index + 1) % max(len(state.stop_ids), 1)
+        state.departures = []
+        state.stop_name = None
+        state.stop_direction = None
+        state.last_updated = None
+        state.error_msg = None
+        state.page_offset = 0
+    state.refresh_now.set()
+
+
+def _action_next_page(state: AppState) -> None:
+    with state.lock:
+        state.page_offset += 1
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +469,37 @@ def draw_separator(win: curses.window, row: int, cols: int) -> None:
     safe_addstr(win, row, 0, "\u2500" * (cols - 1), curses.color_pair(ColorPair.SEP))
 
 
+def draw_status_bar(
+    win: curses.window,
+    rows: int,
+    cols: int,
+    refreshing: bool,  # noqa: FBT001
+    last_updated: datetime.datetime | None,
+    page_info: str,
+    tz: datetime.tzinfo,
+    dim: int,
+) -> None:
+    if refreshing:
+        left_status = " Refreshing..."
+    elif last_updated:
+        left_status = f" {last_updated.astimezone(tz).strftime('%H:%M:%S')}"
+    else:
+        left_status = " Connecting..."
+    safe_addstr(win, rows - 1, 0, left_status, dim)
+    # Right side: keyboard hints (added if space permits)
+    right_parts: list[str] = []
+    hints = ["[n]ext"]
+    if page_info:
+        hints.insert(0, f"[j] page {page_info}")
+    for hint in hints:
+        candidate = " ".join([*right_parts, hint, "[q]uit"])
+        if len(left_status) + len(candidate) + 3 < cols:
+            right_parts.append(hint)
+    right_parts.append("[q]uit")
+    right_text = " ".join(right_parts) + " "
+    safe_addstr(win, rows - 1, cols - len(right_text) - 1, right_text, dim)
+
+
 def draw_screen(
     stdscr: curses.window,
     *,
@@ -441,15 +510,16 @@ def draw_screen(
     last_updated: datetime.datetime | None,
     error_msg: str | None,
     refreshing: bool,
-    max_departures: int,
+    page_offset: int,
     tz: datetime.tzinfo,
-) -> None:
+) -> int:
+    """Draw the full screen. Returns the clamped page_offset actually used."""
     stdscr.erase()
     rows, cols = stdscr.getmaxyx()
 
     if rows < 5 or cols < 20:
         safe_addstr(stdscr, 0, 0, "Terminal too small", curses.A_BOLD)
-        return
+        return 0
 
     bold = curses.color_pair(ColorPair.HEADER) | curses.A_BOLD
     dim = curses.color_pair(ColorPair.SEP)
@@ -497,9 +567,13 @@ def draw_screen(
     # --- Row 3: separator ---
     draw_separator(stdscr, 3, cols)
 
-    # --- Rows 4..rows-2: departure rows ---
-    data_rows = rows - 5  # rows 4 to rows-2 inclusive
-    visible = departures[: min(max_departures, data_rows)]
+    # --- Rows 4..rows-2: departure rows (with paging) ---
+    per_page = rows - 5  # rows 4 to rows-2 inclusive
+    total = len(departures)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = page_offset % total_pages if total_pages > 0 else 0
+    start = page * per_page
+    visible = departures[start : start + per_page]
 
     if not visible and last_updated is not None:
         safe_addstr(stdscr, 4, 2, "No departures", dim)
@@ -541,15 +615,28 @@ def draw_screen(
     draw_separator(stdscr, rows - 2, cols)
 
     # --- Row rows-1: status bar ---
-    if refreshing:
-        left_status = " Refreshing..."
-    elif last_updated:
-        left_status = f" {last_updated.astimezone(tz).strftime('%H:%M:%S')}"
-    else:
-        left_status = " Connecting..."
-    right_status = "[q] quit "
-    safe_addstr(stdscr, rows - 1, 0, left_status, dim)
-    safe_addstr(stdscr, rows - 1, cols - len(right_status) - 1, right_status, dim)
+    page_info = f"{page + 1}/{total_pages}" if total_pages > 1 else ""
+    draw_status_bar(
+        stdscr,
+        rows,
+        cols,
+        refreshing,
+        last_updated,
+        page_info,
+        tz,
+        dim,
+    )
+    return page
+
+
+def _main_handle_key(key: int, state: AppState) -> None:
+    if key == ord("n"):
+        _action_next_stop(state)
+    elif key == ord("j"):
+        _action_next_page(state)
+    elif key == ord("k"):
+        with state.lock:
+            state.page_offset = max(0, state.page_offset - 1)
 
 
 # ---------------------------------------------------------------------------
@@ -570,14 +657,14 @@ def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
     stdscr.timeout(500)
     init_colors()
 
-    stop_id = cfg.get("display", "stop_id")
-    max_dep = cfg.getint("display", "max_departures")
+    raw_ids = cfg.get("display", "stop_ids").split(",")
+    stop_ids = [s.strip() for s in raw_ids if s.strip()]
     try:
         tz = ZoneInfo(cfg.get("display", "timezone"))
     except (ZoneInfoNotFoundError, KeyError):
         tz = ZoneInfo("UTC")
 
-    state = AppState(stop_id=stop_id)
+    state = AppState(stop_ids=stop_ids)
 
     # Handle SIGTERM (systemd stop) gracefully
     def _sigterm(_signum: int, _frame: object) -> None:
@@ -598,18 +685,20 @@ def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
         if key in (ord("q"), ord("Q"), 27):  # q, Q, ESC
             state.stop_event.set()
             break
+        _main_handle_key(key, state)
 
         # Snapshot state under lock
         with state.lock:
             departures = list(state.departures)
-            sid = state.stop_id
+            sid = state.current_stop_id()
             sname = state.stop_name
             sdirection = state.stop_direction
             updated = state.last_updated
             error = state.error_msg
+            pg_offset = state.page_offset
         refreshing = state.refreshing
 
-        draw_screen(
+        clamped = draw_screen(
             stdscr,
             stop_id=sid,
             stop_name=sname,
@@ -618,9 +707,13 @@ def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
             last_updated=updated,
             error_msg=error,
             refreshing=refreshing,
-            max_departures=max_dep,
+            page_offset=pg_offset,
             tz=tz,
         )
+        # Keep page_offset in sync (wraps around via modulo)
+        if clamped != pg_offset:
+            with state.lock:
+                state.page_offset = clamped
         stdscr.refresh()
 
     # Clean shutdown
@@ -636,6 +729,7 @@ def main(stdscr: curses.window, cfg: configparser.ConfigParser) -> None:
 
 def run() -> None:
     parser = argparse.ArgumentParser(description="RTPI departure board")
+    parser.add_argument("stop_id", nargs="?", help="Stop ID (overrides config)")
     parser.add_argument(
         "-l", "--list", action="store_true", help="List all stops and exit"
     )
@@ -647,6 +741,9 @@ def run() -> None:
     if args.list:
         list_stops(cfg)
         return
+
+    if args.stop_id:
+        cfg.set("display", "stop_ids", args.stop_id)
 
     with contextlib.suppress(KeyboardInterrupt):
         curses.wrapper(main, cfg)
