@@ -7,11 +7,13 @@ After=getty@tty1.service
 
 [Service]
 Type=simple
-# Adjust User and WorkingDirectory/ExecStart paths to match your setup.
+# Adjust User to match your setup.
 # The user must be in the "gpio" group for physical buttons.
 User=dietpi
-WorkingDirectory=/home/dietpi/lt-rtpi-display
-ExecStart=/usr/bin/python3 /home/dietpi/lt-rtpi-display/rtpi.py
+ExecStart=lt-rtpi-display
+# If running from a git checkout instead of an installed package:
+# WorkingDirectory=/home/dietpi/lt-rtpi-display
+# ExecStart=/usr/bin/python3 -m lt_rtpi_display
 Restart=on-failure
 RestartSec=10
 

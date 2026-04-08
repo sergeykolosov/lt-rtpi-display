@@ -1,6 +1,10 @@
+[build-system]
+requires = ["uv_build>=0.11.4,<0.12"]
+build-backend = "uv_build"
+
 [project]
 name = "lt-rtpi-display"
-version = "0.1.0"
+version = "0.2.0"
 description = "Lightweight terminal departure board for public transport in Vilnius and other Lithuanian cities"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,8 +17,13 @@ classifiers = [
     "Topic :: Utilities",
     "Intended Audience :: End Users/Desktop",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 dependencies = []
+
+[project.scripts]
+lt-rtpi-display = "lt_rtpi_display.rtpi:run"
 
 [project.urls]
 Repository = "https://github.com/sergeykolosov/lt-rtpi-display"
@@ -26,7 +35,10 @@ dev = [
 ]
 
 [tool.mypy]
-files = ["rtpi.py"]
+files = ["src"]
+
+[tool.ruff]
+src = ["src"]
 
 [tool.ruff.lint]
 preview = true

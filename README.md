@@ -23,9 +23,17 @@ Supported cities: Vilnius, Kaunas, Klaipėda, Panevėžys, Alytus, Druskininkai.
 ## Quick start
 
 ```bash
+# Run directly (no install needed):
+uvx lt-rtpi-display --city vilnius 0103
+
+# Or install permanently:
+uv tool install lt-rtpi-display
+lt-rtpi-display --city vilnius 0103
+
+# Or from source:
 git clone https://github.com/sergeykolosov/lt-rtpi-display
 cd lt-rtpi-display
-python3 rtpi.py --city vilnius 0103
+uv run lt-rtpi-display --city vilnius 0103
 ```
 
 ## Configuration
@@ -51,21 +59,21 @@ Config lookup order (first found wins):
 4. `/etc/lt-rtpi-display/config.ini` (system-wide, good for kiosk)
 5. Built-in defaults
 
-Find your stop ID on [stops.lt](https://www.stops.lt/vilnius/) — it appears in the URL when you select a stop. Use `python3 rtpi.py --list` to print all known stops, or `python3 rtpi.py --city kaunas --list` for another city.
+Find your stop ID on [stops.lt](https://www.stops.lt/vilnius/) — it appears in the URL when you select a stop. Use `lt-rtpi-display --list` to print all known stops, or `lt-rtpi-display --city kaunas --list` for another city.
 
 For the full list of configurable options see [config.example.ini](./config.example.ini).
 
 ## CLI
 
 ```bash
-python3 rtpi.py [stop_id]                   # Override configured stop
-python3 rtpi.py -c /path/config.ini         # Use a specific config file
-python3 rtpi.py --list                      # List all stops and exit
+lt-rtpi-display [stop_id]                   # Override configured stop
+lt-rtpi-display -c /path/config.ini         # Use a specific config file
+lt-rtpi-display --list                      # List all stops and exit
 
 # examples:
-python3 rtpi.py "0103, 0104"                # Run against multiple stops (switch with [n])
-python3 rtpi.py --city klaipeda 0901        # Use a different city + specific stop
-python3 rtpi.py --city kaunas --list        # List stops for another city
+lt-rtpi-display "0103, 0104"                # Run against multiple stops (switch with [n])
+lt-rtpi-display --city klaipeda 0901        # Use a different city + specific stop
+lt-rtpi-display --city kaunas --list        # List stops for another city
 ```
 
 ## Display
@@ -103,17 +111,24 @@ This is the original use case: a dedicated departure board running on a Raspberr
 ### Autostart (systemd)
 
 ```bash
-# On the Pi
-git clone https://github.com/sergeykolosov/lt-rtpi-display ~/lt-rtpi-display
-cd ~/lt-rtpi-display
-cp config.example.ini config.ini   # Edit to set your stop_ids
+# On the Pi — install from PyPI:
+python -m pip install lt-rtpi-display
 
+# Set up config:
+mkdir -p ~/.config/lt-rtpi-display
+cp config.example.ini ~/.config/lt-rtpi-display/config.ini  # Edit to set your stop_ids
+
+# Or clone the repo and install from source:
+# git clone https://github.com/sergeykolosov/lt-rtpi-display ~/lt-rtpi-display
+# python -m pip install ~/lt-rtpi-display
+
+# Install and enable the service:
 sudo cp lt-rtpi-display.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now lt-rtpi-display.service
 ```
 
-The service picks up `./config.ini` from its `WorkingDirectory`. It binds to `/dev/tty1` with `TERM=linux`, matching how dietpi-cloudshell works on the framebuffer console.
+The service runs the installed `lt-rtpi-display` console script. It binds to `/dev/tty1` with `TERM=linux`, matching how dietpi-cloudshell works on the framebuffer console.
 
 ### Physical buttons
 
@@ -140,8 +155,10 @@ The user (e.g. `dietpi`) must be in the `gpio` group: `sudo usermod -aG gpio die
 Requires [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv sync                    # Install dev dependencies
-uv run -- ruff check       # Lint
-uv run -- ruff format      # Format
-uv run -- mypy             # Type check
+uv sync                          # Install dev dependencies + editable package
+uv run lt-rtpi-display --help    # Run via console script
+uv run python -m lt_rtpi_display # Run via __main__
+uv run -- ruff check             # Lint
+uv run -- ruff format            # Format
+uv run -- mypy                   # Type check
 ```

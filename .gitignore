@@ -19,5 +19,9 @@ uv.lock
 *.swp
 *~
 
+# Build artifacts
+dist/
+*.egg-info/
+
 # User config (use config.example.ini as template)
 config.ini
